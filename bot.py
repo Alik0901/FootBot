@@ -1,7 +1,6 @@
 import os
 import asyncio
-from multiprocessing import Process
-from flask import Flask, request, jsonify, abort, request
+from flask import Flask, request, jsonify, abort
 
 from aiogram import Bot, Dispatcher, types
 from dotenv import load_dotenv
@@ -32,10 +31,10 @@ init_db()
 # Регистрация хендлеров Aiogram
 register_handlers(dp)
 
-# Запуск планировщика (APScheduler) для периодической проверки подписок
-scheduler = start_scheduler()
+# Запуск планировщика для отзыва просроченных подписок
+start_scheduler()
 
-# Flask-приложение для вебхука платежей
+# Flask-приложение для вебхуков
 app = Flask(__name__)
 
 @app.route('/payment_webhook', methods=['POST'])
@@ -44,46 +43,39 @@ def payment_webhook():
     signature = request.headers.get('X-Signature')
     if not signature or not verify_signature(raw_body, signature):
         abort(400, 'Invalid signature')
+
     data = request.json
-    # Обработка успешной оплаты (Closed)
     if data.get('status') == 'Closed':
-        # Параметры из уведомления
         user_id = int(data.get('orderId'))
         description = data.get('description', '')
         plan = description.split()[0]
-        # Расчёт срока по плану
         days_map = {'Неделя': 7, 'Месяц': 30, 'Чат': 1}
         days = days_map.get(plan, 0)
-        expires_at = asyncio.get_event_loop().time()  # placeholder
-        # Сохраняем подписку
+
         from datetime import datetime, timedelta
         expires = datetime.utcnow() + timedelta(days=days)
+
         session = SessionLocal()
         sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
         session.add(sub)
         session.commit()
         session.close()
-        # Разбаниваем пользователя
+
+        # Разбаниваем пользователя в канале
         asyncio.get_event_loop().create_task(
             bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         )
-    return jsonify({'status': 'ok'})
- 
-    # Запуск Aiogram бота
-    def run_bot():
-        from aiogram.utils import executor
-        executor.start_polling(dp, skip_updates=True)
 
-        # В продакшене запуск происходит через Gunicorn, 
-        # но для локального dev можно оставить aiogram:
-        from aiogram.utils import executor
-        executor.start_polling(dp, skip_updates=True)
-        @app.route('/telegram_webhook', methods=['POST'])
-        
+    return jsonify({'status': 'ok'})
+
+@app.route('/telegram_webhook', methods=['POST'])
 def telegram_webhook():
+    # Получаем апдейт из запроса и передаём в Aiogram
     update = types.Update(**request.json)
-    # Передаём апдейт в Aiogram для обработки хендлерами
     asyncio.get_event_loop().create_task(dp.process_update(update))
     return jsonify({'status': 'ok'})
 
- 
+if __name__ == '__main__':
+    # Для локальной разработки: поллинг Aiogram
+    from aiogram.utils import executor
+    executor.start_polling(dp, skip_updates=True)
