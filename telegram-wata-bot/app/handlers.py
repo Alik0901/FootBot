@@ -1,7 +1,6 @@
 import os
 from datetime import datetime
-from aiogram import types
-from aiogram.dispatcher import Dispatcher
+from aiogram import types, Dispatcher
 
 from app.keyboards import main_menu, plans_menu
 from app.payments import create_invoice
