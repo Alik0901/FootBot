@@ -64,9 +64,12 @@ if __name__ == "__main__":
     flask_thread.start()
     print(">>> Flask thread started, now starting polling <<<")
 
-    # 2) Сбрасываем любой webhook (на случай, если он был)
-    asyncio.get_event_loop().run_until_complete(bot.delete_webhook(drop_pending_updates=True))
+    # 2) Сбрасываем webhook, чтобы polling не конфликтовал
+    print(">>> Deleting existing Telegram webhook <<<")
+    asyncio.get_event_loop().run_until_complete(
+    bot.delete_webhook(drop_pending_updates=True)
+    )
 
     # 3) Стартуем Aiogram polling, обработку кнопок и /start
-    print(">>> POLLING STARTED <<<")
+    print(">>> Starting polling <<<")
     executor.start_polling(dp, skip_updates=True)
