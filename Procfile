@@ -1,3 +1,1 @@
-web: python bot.py
-worker: python poll.py
-
+web: python entry.py
