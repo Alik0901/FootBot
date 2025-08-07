@@ -6,6 +6,8 @@ from aiogram.utils import executor
 from app.models import init_db
 from app.handlers import register_handlers
 
+print(">>> LOADED poll.py <<<")
+
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:

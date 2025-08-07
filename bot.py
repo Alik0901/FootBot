@@ -7,6 +7,8 @@ from aiogram import Bot
 from app.models import init_db, SessionLocal, Subscription
 from app.payments import verify_signature
 
+print(">>> LOADED bot.py <<<")
+
 load_dotenv()
 TOKEN      = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
