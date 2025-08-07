@@ -1,0 +1,8 @@
+aiogram
+Flask
+SQLAlchemy
+psycopg2-binary      # если будете на Postgres
+cryptography
+apscheduler
+requests
+python-dotenv        # для локальной подгрузки .env
