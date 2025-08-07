@@ -1,3 +1,4 @@
+print(">>> WORKER PROCESS STARTING poll.py <<<")
 import os, asyncio
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
@@ -22,5 +23,12 @@ dp = Dispatcher(bot)
 register_handlers(dp)
 
 if __name__ == "__main__":
-    print(">>> POLLING WORKER ACTIVE <<<")
+    print(">>> poll.py: deleting webhook and starting polling <<<")
+    bot = Bot(token=TOKEN)
+    asyncio.get_event_loop().run_until_complete(
+        bot.delete_webhook(drop_pending_updates=True)
+    )
+    init_db()
+    dp = Dispatcher(bot)
+    register_handlers(dp)
     executor.start_polling(dp, skip_updates=True)

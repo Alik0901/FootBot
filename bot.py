@@ -1,3 +1,4 @@
+print(">>> WEB PROCESS STARTING bot.py <<<")
 import os, asyncio
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, abort
@@ -46,3 +47,8 @@ def payment_webhook():
         )
 
     return jsonify(status="ok")
+    
+if __name__ == '__main__':
+    print(">>> FALLBACK POLLING STARTING <<<")
+    from aiogram.utils import executor
+    executor.start_polling(dp, skip_updates=True)
