@@ -40,46 +40,48 @@ def payment_webhook():
     sig = request.headers.get("X-Signature")
     if not sig or not verify_signature(raw, sig):
         abort(400, "Invalid signature")
+
     data = request.json or {}
     if data.get("status") == "Closed":
         user_id = int(data["orderId"])
         plan    = data.get("description","").split()[0]
         expires = datetime.utcnow() + timedelta(days={'Неделя':7,'Месяц':30,'Чат':1}.get(plan,0))
+
         session = SessionLocal()
         session.add(Subscription(user_id=user_id, plan=plan, expires_at=expires))
         session.commit()
         session.close()
+
+        # unban asynchronously
         asyncio.create_task(
             bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         )
+
     return jsonify(status="ok")
 
-# Эндпоинт для Telegram webhook
 @app.route("/telegram_webhook", methods=["POST"])
 def telegram_webhook():
     update = types.Update(**request.json)
     asyncio.create_task(dp.process_update(update))
     return jsonify(status="ok")
 
-# Настройка webhook-констант
+# ─── Webhook config ────────────────────────────────────────────────────────────
 WEBHOOK_PATH = "/telegram_webhook"
 WEBHOOK_URL  = BASE_URL + WEBHOOK_PATH
 
-if __name__ == "__main__":
-    # Для локальной разработки
-    from aiogram.utils import executor
-    executor.start_polling(dp, skip_updates=True)
-else:
-    # При production (Gunicorn)
-    async def on_startup(_):
-        await bot.set_webhook(WEBHOOK_URL)
+# Запускаем webhook-сервер через start_webhook (например, под Gunicorn)
+async def on_startup(dispatcher):
+    # удаляем старый webhook, чтобы не было конфликтов
+    await bot.delete_webhook(drop_pending_updates=True)
+    # настраиваем новый
+    await bot.set_webhook(WEBHOOK_URL)
 
-    start_webhook(
-        dispatcher=dp,
-        webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 5000)),
-        skip_updates=True,
-        app=app
-    )
+start_webhook(
+    dispatcher   = dp,
+    webhook_path = WEBHOOK_PATH,
+    on_startup   = on_startup,
+    host         = "0.0.0.0",
+    port         = int(os.getenv("PORT", 5000)),
+    skip_updates = True,
+    app          = app,
+)
