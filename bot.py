@@ -68,18 +68,15 @@ def payment_webhook():
             bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         )
     return jsonify({'status': 'ok'})
-
-if __name__ == '__main__':
-    # Запуск Flask вебхука
-    def run_webhook():
-        port = int(os.getenv('PORT', 5000))
-        app.run(host='0.0.0.0', port=port)
-
+ 
     # Запуск Aiogram бота
     def run_bot():
         from aiogram.utils import executor
         executor.start_polling(dp, skip_updates=True)
 
-    # Параллельный запуск
-    Process(target=run_webhook).start()
-    Process(target=run_bot).start()
+        # В продакшене запуск происходит через Gunicorn, 
+        # но для локального dev можно оставить aiogram:
+        from aiogram.utils import executor
+        executor.start_polling(dp, skip_updates=True)
+
+ 

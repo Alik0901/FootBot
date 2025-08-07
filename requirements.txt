@@ -6,3 +6,4 @@ cryptography
 apscheduler
 requests
 python-dotenv
+gunicorn
