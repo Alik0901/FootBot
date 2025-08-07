@@ -68,4 +68,5 @@ if __name__ == "__main__":
     asyncio.get_event_loop().run_until_complete(bot.delete_webhook(drop_pending_updates=True))
 
     # 3) Стартуем Aiogram polling, обработку кнопок и /start
+    print(">>> POLLING STARTED <<<")
     executor.start_polling(dp, skip_updates=True)
