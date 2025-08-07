@@ -1,10 +1,13 @@
 import os
+import logging
 from datetime import datetime
 from aiogram import types, Dispatcher
 
 from app.keyboards import main_menu, plans_menu
 from app.payments import create_invoice
 from app.models import SessionLocal, Subscription
+from requests.exceptions import HTTPError
+
 
 # Тарифы: ключ -> (название, цена, дни)
 PLAN_MAP = {
@@ -33,19 +36,27 @@ def register_handlers(dp: Dispatcher):
         await callback.answer()
 
     @dp.callback_query_handler(lambda c: c.data.startswith('plan_'))
-    async def process_plan(callback: types.CallbackQuery):
-        plan_key = callback.data
-        name, amount, days = PLAN_MAP[plan_key]
+async def process_plan(callback: types.CallbackQuery):
+    name, amount, days = PLAN_MAP[callback.data]
+    try:
         invoice = create_invoice(
             user_id=callback.from_user.id,
             amount=amount,
             plan=name,
             base_url=BASE_URL
         )
-        await callback.message.answer(
-            f"Создан счёт на {amount}₽. Оплатите по ссылке: {invoice.get('url')}"
-        )
-        await callback.answer()
+        pay_url = invoice.get("url")
+    except HTTPError as e:
+        if e.response.status_code == 401:
+            # Тестовый режим без токена — возвращаем простую тестовую ссылку
+            pay_url = f"{BASE_URL}/testpay?user_id={callback.from_user.id}&plan={name}"
+        else:
+            logging.exception("Ошибка при создании счёта")
+            await callback.message.answer("❗️ Не удалось создать счёт. Попробуйте позже.")
+            return
+
+    await callback.message.answer(f"Счёт на {amount}₽: {pay_url}")
+    await callback.answer()
 
     @dp.callback_query_handler(lambda c: c.data == 'my_subs')
     async def process_my_subs(callback: types.CallbackQuery):
