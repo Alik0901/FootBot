@@ -1,7 +1,7 @@
 import asyncio
 import os
 from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.models import SessionLocal, Subscription
 from aiogram import Bot
@@ -36,7 +36,7 @@ def start_scheduler():
     """
     Инициализирует и запускает AsyncIOScheduler для периодической проверки подписок.
     """
-    scheduler = AsyncIOScheduler()
+    scheduler = BackgroundScheduler()
     # Проверяем каждый час
     scheduler.add_job(remove_expired_subscriptions, 'interval', hours=1)
     scheduler.start()
