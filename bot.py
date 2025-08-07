@@ -1,9 +1,9 @@
 import os
 import asyncio
 from multiprocessing import Process
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, abort, request
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
 from dotenv import load_dotenv
 
 from app.models import init_db, SessionLocal, Subscription
@@ -78,5 +78,12 @@ def payment_webhook():
         # но для локального dev можно оставить aiogram:
         from aiogram.utils import executor
         executor.start_polling(dp, skip_updates=True)
+        @app.route('/telegram_webhook', methods=['POST'])
+        
+def telegram_webhook():
+    update = types.Update(**request.json)
+    # Передаём апдейт в Aiogram для обработки хендлерами
+    asyncio.get_event_loop().create_task(dp.process_update(update))
+    return jsonify({'status': 'ok'})
 
  
