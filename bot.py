@@ -1,8 +1,8 @@
 import os
 import asyncio
 from flask import Flask, request, jsonify, abort
-
 from aiogram import Bot, Dispatcher, types
+from aiogram.utils.executor import start_webhook
 from dotenv import load_dotenv
 
 from app.models import init_db, SessionLocal, Subscription
@@ -10,45 +10,42 @@ from app.payments import verify_signature
 from app.handlers import register_handlers
 from app.scheduler import start_scheduler
 
-# Загрузка переменных окружения из .env (для локального запуска)
+# Загрузка .env (для локалки) и переменных окружения
 load_dotenv()
 
-# Параметры из окружения
 TOKEN = os.getenv('TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
-BASE_URL = os.getenv('BASE_URL')
+BASE_URL = os.getenv('BASE_URL')  # например https://your-project.up.railway.app
 
 if not TOKEN or not CHANNEL_ID or not BASE_URL:
-    raise RuntimeError('Не заданы необходимые переменные окружения TOKEN, CHANNEL_ID, BASE_URL')
+    raise RuntimeError("Не заданы необходимые переменные окружения TOKEN, CHANNEL_ID, BASE_URL")
 
-# Инициализация бота и диспетчера
+# --- Aiogram setup ---
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
-
-# Инициализация БД (создание таблиц)
-init_db()
-
-# Регистрация хендлеров Aiogram
 register_handlers(dp)
 
-# Запуск планировщика для отзыва просроченных подписок
+# --- Database setup ---
+init_db()
+
+# --- Scheduler ---
 start_scheduler()
 
-# Flask-приложение для вебхуков
+# --- Flask app for webhooks ---
 app = Flask(__name__)
 
 @app.route('/payment_webhook', methods=['POST'])
 def payment_webhook():
-    raw_body = request.get_data()
-    signature = request.headers.get('X-Signature')
-    if not signature or not verify_signature(raw_body, signature):
+    raw = request.get_data()
+    sig = request.headers.get('X-Signature')
+    if not sig or not verify_signature(raw, sig):
         abort(400, 'Invalid signature')
 
     data = request.json
     if data.get('status') == 'Closed':
         user_id = int(data.get('orderId'))
-        description = data.get('description', '')
-        plan = description.split()[0]
+        desc = data.get('description', '')
+        plan = desc.split()[0]
         days_map = {'Неделя': 7, 'Месяц': 30, 'Чат': 1}
         days = days_map.get(plan, 0)
 
@@ -56,26 +53,39 @@ def payment_webhook():
         expires = datetime.utcnow() + timedelta(days=days)
 
         session = SessionLocal()
-        sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
-        session.add(sub)
+        session.add(Subscription(user_id=user_id, plan=plan, expires_at=expires))
         session.commit()
         session.close()
 
-        # Разбаниваем пользователя в канале
         asyncio.get_event_loop().create_task(
             bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         )
 
     return jsonify({'status': 'ok'})
 
-@app.route('/telegram_webhook', methods=['POST'])
-def telegram_webhook():
-    # Получаем апдейт из запроса и передаём в Aiogram
-    update = types.Update(**request.json)
-    asyncio.get_event_loop().create_task(dp.process_update(update))
-    return jsonify({'status': 'ok'})
+# Константы для webhook
+WEBHOOK_PATH = '/telegram_webhook'
+WEBHOOK_URL  = BASE_URL + WEBHOOK_PATH
 
+# --- Entrypoint for production via Gunicorn ---
 if __name__ == '__main__':
-    # Для локальной разработки: поллинг Aiogram
+    # Локальный режим: fallback на polling
     from aiogram.utils import executor
     executor.start_polling(dp, skip_updates=True)
+else:
+    # При старте Gunicorn: регистрируем и запускаем webhook-сервер
+    # (этот блок не выполняется при импорте, только при gunicorn bot:app)
+    async def on_startup(_):
+        # Удаляем старый webhook и ставим новый
+        await bot.delete_webhook(drop_pending_updates=True)
+        await bot.set_webhook(WEBHOOK_URL)
+
+    start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        host='0.0.0.0',
+        port=int(os.getenv('PORT', 5000)),
+        skip_updates=True,
+        app=app
+    )
