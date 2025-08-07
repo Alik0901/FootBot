@@ -3,8 +3,8 @@ WORKDIR /app
 COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 5000
-CMD ["gunicorn", "entry:app", \
-     "--workers", "2", \
-     "--bind", "0.0.0.0:5000", \
-     "--capture-output", \
+CMD ["gunicorn", "entry:app",
+     "--workers", "2",
+     "--bind", "0.0.0.0:5000",
+     "--capture-output",
      "--log-level", "debug"]
