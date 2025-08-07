@@ -1,3 +1,5 @@
+# poll.py
+
 import os
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
@@ -6,12 +8,13 @@ from aiogram.utils import executor
 from app.models import init_db
 from app.handlers import register_handlers
 
+# Загрузить .env (локально) / переменные окружения (в Railway)
 load_dotenv()
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise RuntimeError("TOKEN is not set")
 
-# Инициализация
+# Инициализация БД и бота
 init_db()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
