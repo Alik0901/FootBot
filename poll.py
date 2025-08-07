@@ -22,4 +22,5 @@ dp = Dispatcher(bot)
 register_handlers(dp)
 
 if __name__ == "__main__":
+    print(">>> POLLING WORKER ACTIVE <<<")
     executor.start_polling(dp, skip_updates=True)
