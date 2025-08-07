@@ -24,7 +24,7 @@ def register_handlers(dp: Dispatcher):
     # другие регистрации: мои подписки, бонусы, помощь…
 
 async def cmd_start(message: types.Message):
-    print(f"[DEBUG] cmd_start received: {message.text} from {message.from_user.id}")
+    print(f"[DEBUG] cmd_start invoked by chat_id={message.chat.id}")
     await message.answer("Добро пожаловать! Выберите действие:", reply_markup=main_menu())
 
 async def show_plans(message: types.Message):
