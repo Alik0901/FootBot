@@ -19,31 +19,23 @@ load_dotenv()
 TOKEN      = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 if not TOKEN or not CHANNEL_ID:
-    raise RuntimeError("TOKEN и CHANNEL_ID должны быть заданы")
+    raise RuntimeError("TOKEN and CHANNEL_ID must be set")
 
 init_db()
 start_scheduler()
 
-# ─── Aiogram / Polling setup ──────────────────────────────────────────────────
+# ─── Aiogram setup (main thread!) ────────────────────────────────────────────
 bot = Bot(token=TOKEN)
 dp  = Dispatcher(bot)
 register_handlers(dp)
 
-# сразу сбросим webhook, чтобы polling не конфликтовал
+# Удаляем webhook, чтобы polling не конфликтовал
 asyncio.get_event_loop().run_until_complete(
     bot.delete_webhook(drop_pending_updates=True)
 )
-print(">>> Telegram webhook deleted, starting polling <<<")
+print(">>> Telegram webhook deleted <<<")
 
-# Начинаем polling в отдельном потоке, чтобы он не блокировал Flask
-def run_polling():
-    print(">>> Polling thread start <<<")
-    executor.start_polling(dp, skip_updates=True)
-
-poll_thread = threading.Thread(target=run_polling, daemon=True)
-poll_thread.start()
-
-# ─── Flask setup ──────────────────────────────────────────────────────────────
+# ─── Flask setup (will run in daemon thread) ─────────────────────────────────
 app = Flask(__name__)
 
 @app.route("/payment_webhook", methods=["POST"])
@@ -64,20 +56,26 @@ def payment_webhook():
         session.commit()
         session.close()
 
+        # Unban asynchronously on the main loop
         asyncio.get_event_loop().create_task(
             bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         )
     return jsonify(status="ok")
 
 def run_flask():
-    # Запускаем Flask
+    print(">>> Flask thread running <<<")
     app.run(
         host="0.0.0.0",
         port=int(os.getenv("PORT", 5000)),
         threaded=True,
-        use_reloader=False
+        use_reloader=False,
     )
 
 if __name__ == "__main__":
-    print(">>> Flask thread starting <<<")
-    run_flask()  # в главном потоке
+    # 1) Стартуем Flask в фоне
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # 2) Стартуем Aiogram polling в главном потоке (своим event loop)
+    print(">>> Starting Aiogram polling <<<")
+    executor.start_polling(dp, skip_updates=True)
