@@ -1,8 +1,8 @@
-aiogram
+aiogram==2.25.1
 Flask
 SQLAlchemy
-psycopg2-binary      # если будете на Postgres
+psycopg2-binary
 cryptography
 apscheduler
 requests
-python-dotenv        # для локальной подгрузки .env
+python-dotenv
