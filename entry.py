@@ -14,22 +14,36 @@ from app.payments import verify_signature
 from app.handlers import register_handlers
 from app.scheduler import start_scheduler
 
+# ─── Load env & init ──────────────────────────────────────────────────────────
 load_dotenv()
 TOKEN      = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 if not TOKEN or not CHANNEL_ID:
-    raise RuntimeError("Не заданы TOKEN или CHANNEL_ID")
+    raise RuntimeError("TOKEN и CHANNEL_ID должны быть заданы")
 
-# Инициализация БД и планировщика
 init_db()
 start_scheduler()
 
-# Aiogram
+# ─── Aiogram / Polling setup ──────────────────────────────────────────────────
 bot = Bot(token=TOKEN)
 dp  = Dispatcher(bot)
 register_handlers(dp)
 
-# Flask
+# сразу сбросим webhook, чтобы polling не конфликтовал
+asyncio.get_event_loop().run_until_complete(
+    bot.delete_webhook(drop_pending_updates=True)
+)
+print(">>> Telegram webhook deleted, starting polling <<<")
+
+# Начинаем polling в отдельном потоке, чтобы он не блокировал Flask
+def run_polling():
+    print(">>> Polling thread start <<<")
+    executor.start_polling(dp, skip_updates=True)
+
+poll_thread = threading.Thread(target=run_polling, daemon=True)
+poll_thread.start()
+
+# ─── Flask setup ──────────────────────────────────────────────────────────────
 app = Flask(__name__)
 
 @app.route("/payment_webhook", methods=["POST"])
@@ -53,11 +67,10 @@ def payment_webhook():
         asyncio.get_event_loop().create_task(
             bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         )
-
     return jsonify(status="ok")
 
 def run_flask():
-    # Отключаем перезапуск и включаем многопоточность
+    # Запускаем Flask
     app.run(
         host="0.0.0.0",
         port=int(os.getenv("PORT", 5000)),
@@ -66,17 +79,5 @@ def run_flask():
     )
 
 if __name__ == "__main__":
-    # 1) Стартуем Flask в daemon‐потоке
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print(">>> Flask thread started, now starting polling <<<")
-
-    # 2) Удаляем старый webhook, чтобы polling не конфликтовал
-    print(">>> Deleting Telegram webhook <<<")
-    asyncio.get_event_loop().run_until_complete(
-        bot.delete_webhook(drop_pending_updates=True)
-    )
-    print(">>> ABOUT TO CALL executor.start_polling <<<")
-    # 3) Запускаем polling
-    print(">>> Starting polling <<<")
-    executor.start_polling(dp, skip_updates=True)
+    print(">>> Flask thread starting <<<")
+    run_flask()  # в главном потоке
