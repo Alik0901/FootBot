@@ -83,5 +83,5 @@ start_webhook(
     host         = "0.0.0.0",
     port         = int(os.getenv("PORT", 5000)),
     skip_updates = True,
-    app          = app,
+    web_app          = app,
 )
