@@ -18,24 +18,47 @@ PLAN_MAP = {
     "plan_test1m": ("Тест1м",   1.0, 0),
 }
 
-APP_BASE_URL   = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
-ADMIN_CONTACT  = os.getenv("ADMIN_CONTACT", "@YourAdmin")  # контакт для помощи
+APP_BASE_URL  = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
+ADMIN_CONTACT = os.getenv("ADMIN_CONTACT", "@YourAdmin")
+CLUB_NAME     = os.getenv("CLUB_NAME", "FOOT SECRET CLUB")  # название клуба для заголовка
+
+
+def _admin_contact_text() -> str:
+    # Если дали ссылку — делаем кликабельной; если @username — оставляем как есть
+    if ADMIN_CONTACT.startswith("http"):
+        return f'<a href="{ADMIN_CONTACT}">{ADMIN_CONTACT}</a>'
+    return ADMIN_CONTACT
+
+
+def _welcome_text() -> str:
+    # HTML‑верстка приветствия
+    return (
+        f'🔥 <b>ДОБРО ПОЖАЛОВАТЬ В «[ {CLUB_NAME} ]»!</b> 🔥\n'
+        f'<i>(Твой ежедневный сериал, где главные роли играют… ножки…)</i>\n\n'
+        'Каждый день — новый «эпизод» с дерзкими фото и дразнящими описаниями. '
+        'Ты узнаешь тайны этих пяточек, почувствуешь напряжение в каждом кадре… и захочешь «продолжения».\n\n'
+        '• 📸 Качественные фото — будто кадры из эротического триллера.\n'
+        '• 📖 Сочные подписи — мини‑истории, намёки, интрига…\n'
+        '• ⏳ Ежедневные «выпуски» — подпишись, чтобы не пропустить развязку!\n\n'
+        f'💌 Эксклюзивные заказы — доступны только для избранных (пиши в ЛС { _admin_contact_text() } 👀)'
+    )
 
 
 def register_handlers(dp: Dispatcher):
     dp.register_message_handler(cmd_start, commands=['start'])
 
-    dp.register_callback_query_handler(cb_buy,     lambda c: c.data == 'buy')
-    dp.register_callback_query_handler(cb_my_subs, lambda c: c.data == 'my_subs')
-    dp.register_callback_query_handler(cb_help,    lambda c: c.data == 'help')
-    dp.register_callback_query_handler(cb_back,    lambda c: c.data == 'back')
+    dp.register_callback_query_handler(cb_buy,      lambda c: c.data == 'buy')
+    dp.register_callback_query_handler(cb_my_subs,  lambda c: c.data == 'my_subs')
+    dp.register_callback_query_handler(cb_bonuses,  lambda c: c.data == 'bonuses')
+    dp.register_callback_query_handler(cb_help,     lambda c: c.data == 'help')
+    dp.register_callback_query_handler(cb_back,     lambda c: c.data == 'back')
 
     dp.register_callback_query_handler(process_plan, lambda c: c.data in PLAN_MAP)
 
 
 async def cmd_start(message: types.Message):
     log.info("cmd_start chat_id=%s", message.chat.id)
-    await message.answer("Добро пожаловать! Выберите действие:", reply_markup=main_menu())
+    await message.answer(_welcome_text(), reply_markup=main_menu(), parse_mode="HTML")
 
 
 async def cb_buy(callback: types.CallbackQuery):
@@ -45,7 +68,7 @@ async def cb_buy(callback: types.CallbackQuery):
 
 
 async def cb_my_subs(callback: types.CallbackQuery):
-    """Показывает активные подписки пользователя."""
+    """Показывает активные/истёкшие подписки пользователя."""
     log.info("cb_my_subs from user=%s", callback.from_user.id)
     session = SessionLocal()
     try:
@@ -67,7 +90,7 @@ async def cb_my_subs(callback: types.CallbackQuery):
             text = "Ваши подписки:\n\n" + "\n".join(lines)
 
         await callback.message.edit_text(text, reply_markup=main_menu())
-    except Exception as e:
+    except Exception:
         log.exception("Failed to fetch subscriptions for user=%s", callback.from_user.id)
         await callback.message.edit_text("Ошибка при получении данных о подписках.", reply_markup=main_menu())
     finally:
@@ -75,22 +98,36 @@ async def cb_my_subs(callback: types.CallbackQuery):
     await callback.answer()
 
 
+async def cb_bonuses(callback: types.CallbackQuery):
+    """Заглушка под бонусы/акции — можешь заменить на актуальные условия."""
+    text = (
+        "🎁 <b>Бонусы и акции</b>\n\n"
+        "— Приведи друга и получи +1 день к подписке.\n"
+        "— Скидка 50% на первый месяц для новых пользователей (по промокоду <b>FIRST50</b>).\n\n"
+        "Подробности у администратора: " + _admin_contact_text()
+    )
+    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    await callback.answer()
+
+
 async def cb_help(callback: types.CallbackQuery):
-    """Отправка информации о помощи и контакте администратора."""
+    """Информация о помощи и контакте администратора."""
     log.info("cb_help from user=%s", callback.from_user.id)
     text = (
-        "Если у вас возникли вопросы или проблемы с подпиской, свяжитесь с администратором канала:\n"
-        f"{ADMIN_CONTACT}"
+        "🆘 <b>Помощь</b>\n\n"
+        "Если возникли вопросы или проблемы с подпиской, напишите администратору:\n"
+        f"{_admin_contact_text()}"
     )
-    await callback.message.edit_text(text, reply_markup=main_menu())
+    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
     await callback.answer()
 
 
 async def cb_back(callback: types.CallbackQuery):
-    await callback.message.edit_text("Возвращаюсь в главное меню:", reply_markup=main_menu())
+    await callback.message.edit_text("Главное меню:", reply_markup=main_menu())
     await callback.answer()
 
 
+# ----- оплата -----
 async def _create_invoice_async(*args, **kwargs):
     import asyncio
     loop = asyncio.get_running_loop()
@@ -102,7 +139,6 @@ async def process_plan(callback: types.CallbackQuery):
     log.info("process_plan user=%s data=%r", callback.from_user.id, callback.data)
 
     order_id = f"tg-{callback.from_user.id}-{callback.id}"
-
     success_url = f"{APP_BASE_URL}/paid/success" if APP_BASE_URL else None
     fail_url    = f"{APP_BASE_URL}/paid/fail"    if APP_BASE_URL else None
 
@@ -119,18 +155,15 @@ async def process_plan(callback: types.CallbackQuery):
     except HTTPError as e:
         log.warning("create_invoice HTTPError: %s", e, exc_info=True)
         await callback.message.answer("❗️ Не удалось создать счёт. Попробуйте чуть позже.")
-        await callback.answer()
-        return
+        await callback.answer(); return
     except Exception as e:
         log.exception("create_invoice failed: %s", e)
         await callback.message.answer("❗️ Произошла ошибка при создании счёта.")
-        await callback.answer()
-        return
+        await callback.answer(); return
 
     if not pay_url:
         await callback.message.answer("❗️ Платёжная ссылка не получена.")
-        await callback.answer()
-        return
+        await callback.answer(); return
 
     await callback.message.answer(f"Счёт на {amount:.2f}₽:\n{pay_url}")
     await callback.answer()

@@ -1,31 +1,35 @@
 # app/keyboards.py
+import os
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
+NEWS_URL = os.getenv("NEWS_URL")  # ссылка на ваш новостной канал/чат
 
 def main_menu() -> InlineKeyboardMarkup:
     """
-    Главное меню:
-    - Купить
-    - Мои подписки
-    - Бонусы
-    - Помощь
+    Красивое главное меню в 2 колонки + блок "Наши новости" отдельной строкой.
     """
-    kb = InlineKeyboardMarkup(row_width=1)
-    kb.add(InlineKeyboardButton('💳 Купить', callback_data='buy'))
-    kb.add(InlineKeyboardButton('📋 Мои подписки', callback_data='my_subs'))
-    kb.add(InlineKeyboardButton('🎁 Бонусы', callback_data='bonuses'))
-    kb.add(InlineKeyboardButton('❓ Помощь', callback_data='help'))
+    kb = InlineKeyboardMarkup(row_width=2)
+
+    # 1 ряд
+    kb.add(
+        InlineKeyboardButton('💳 Купить', callback_data='buy'),
+        InlineKeyboardButton('📜 Мои подписки', callback_data='my_subs'),
+    )
+    # 2 ряд
+    kb.add(
+        InlineKeyboardButton('💰 Бонусы', callback_data='bonuses'),
+        InlineKeyboardButton('🆘 Помощь', callback_data='help'),
+    )
+    # 3 ряд — внешняя ссылка
+    if NEWS_URL:
+        kb.add(InlineKeyboardButton('📣 Наши новости', url=NEWS_URL))
+
     return kb
 
 
 def plans_menu() -> InlineKeyboardMarkup:
     """
-    Меню выбора тарифного плана:
-    - Неделя — 100₽
-    - Месяц — 300₽
-    - Чат 1 день — 50₽
-    - Тест 1 мин — 1₽
-    - Назад
+    Меню выбора тарифного плана (один столбец) + назад.
     """
     kb = InlineKeyboardMarkup(row_width=1)
     kb.insert(InlineKeyboardButton('Неделя — 100₽', callback_data='plan_week'))
