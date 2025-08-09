@@ -13,9 +13,9 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher import Dispatcher as AiogramDispatcher
 
 from app.models import init_db, SessionLocal, Subscription
-from app.payments import verify_signature  # убедись, что функция реально есть в app/payments.py
+from app.payments import verify_signature
 from app.handlers import register_handlers
-from app.scheduler import start_scheduler
+from app.scheduler import start_scheduler  # <- используем колбэк on_expire
 
 
 # ── logging ───────────────────────────────────────────────────────────────────
@@ -30,18 +30,16 @@ log = logging.getLogger("entry")
 load_dotenv()
 TOKEN      = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-BASE_URL   = (os.getenv("BASE_URL", "").rstrip("/"))  # например: https://<proj>.up.railway.app
-TEST_MODE  = os.getenv("TEST_MODE", "1") == "1"       # включит /testpay-заглушку
+BASE_URL   = (os.getenv("BASE_URL", "").rstrip("/"))
+TEST_MODE  = os.getenv("TEST_MODE", "1") == "1"
 
 if not TOKEN or not CHANNEL_ID:
     raise RuntimeError("Не заданы TOKEN или CHANNEL_ID")
 log.info("Environment loaded")
 
-# ── db + scheduler ────────────────────────────────────────────────────────────
+# ── db ────────────────────────────────────────────────────────────────────────
 init_db()
 log.info("Database initialized")
-start_scheduler()
-log.info("Scheduler started")
 
 # ── aiogram ───────────────────────────────────────────────────────────────────
 bot = Bot(token=TOKEN)
@@ -53,7 +51,6 @@ log.info("Aiogram dispatcher ready")
 _loop = asyncio.new_event_loop()
 
 async def _process_update_with_ctx(update: types.Update):
-    # Привязываем экземпляры к текущему контексту
     Bot.set_current(bot)
     AiogramDispatcher.set_current(dp)
     await dp.process_update(update)
@@ -66,7 +63,6 @@ def _loop_worker():
 threading.Thread(target=_loop_worker, name="aiogram-loop", daemon=True).start()
 
 def run_coro(coro):
-    """Планирует корутину в общем loop (thread-safe)."""
     return asyncio.run_coroutine_threadsafe(coro, _loop)
 
 # ── Flask (WSGI) ──────────────────────────────────────────────────────────────
@@ -74,9 +70,8 @@ app = Flask(__name__)
 log.info("Flask app created")
 
 
-# ── общая функция выдачи подписки и инвайта ───────────────────────────────────
+# ── выдача подписки и инвайта ─────────────────────────────────────────────────
 def _grant_subscription(user_id: int, plan: str):
-    """Создаёт подписку в БД, разбанивает и шлёт инвайт в канал (member_limit=1)."""
     days_map = {"Неделя": 7, "Месяц": 30, "Чат": 1}
     days = days_map.get(plan, 0)
     if not user_id or days <= 0:
@@ -85,7 +80,6 @@ def _grant_subscription(user_id: int, plan: str):
 
     expires = datetime.utcnow() + timedelta(days=days)
 
-    # БД
     session = SessionLocal()
     try:
         sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
@@ -95,22 +89,19 @@ def _grant_subscription(user_id: int, plan: str):
         session.close()
 
     async def _unban_and_send():
-        # подстраховка: разбан
         try:
             await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         except Exception:
             pass
-
-        # персональная пригласительная ссылка (1 использ., с истечением)
         invite = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
             name=f"{plan} {user_id}",
-            expire_date=expires,   # aiogram принимает datetime
+            expire_date=expires,
             member_limit=1,
         )
         text = (
             "✅ Оплата получена!\n\n"
-            f"Ваша ссылка в канал:\n{invite.invite_link}\n\n"
+            f"Ссылка в канал:\n{invite.invite_link}\n\n"
             f"Действует до: {expires:%d.%m.%Y %H:%M} UTC"
         )
         try:
@@ -119,10 +110,32 @@ def _grant_subscription(user_id: int, plan: str):
             log.warning("send_message failed for user %s: %s", user_id, e)
 
     run_coro(_unban_and_send())
-    log.info(
-        "Subscription granted & unban scheduled: user_id=%s plan=%s until=%s",
-        user_id, plan, expires.isoformat() + "Z"
-    )
+    log.info("Subscription granted: user_id=%s plan=%s until=%s",
+             user_id, plan, expires.isoformat() + "Z")
+
+
+# ── автоотключение (бан→анбан) по завершению подписки ─────────────────────────
+def on_expire(user_id: int, plan: str) -> None:
+    async def _do():
+        try:
+            # «выкинуть»: бан, затем сразу анбан
+            await bot.ban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+            await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        except Exception as e:
+            log.warning("Kick failed user_id=%s: %s", user_id, e)
+        try:
+            await bot.send_message(
+                chat_id=user_id,
+                text="⏰ Срок вашей подписки истёк. Доступ к каналу отключён.\n"
+                     "Вы можете оформить новую подписку в боте."
+            )
+        except Exception:
+            pass
+    run_coro(_do())
+
+# запускаем планировщик ТЕПЕРЬ, когда есть run_coro и bot
+start_scheduler(on_expire=on_expire, interval_seconds=60)
+log.info("Scheduler started")
 
 
 # ── Telegram webhook ──────────────────────────────────────────────────────────
@@ -217,7 +230,7 @@ def favicon():
     return ("", 204, {"Cache-Control": "public, max-age=86400"})
 
 
-# ── автосоздание вебхука ──────────────────────────────────────────────────────
+# ── автоустановка вебхука в TG ────────────────────────────────────────────────
 WEBHOOK_URL = f"{BASE_URL}/telegram_webhook" if BASE_URL else ""
 if WEBHOOK_URL:
     def _set_webhook_once():
@@ -233,7 +246,6 @@ if WEBHOOK_URL:
                 log.exception("Failed to set webhook")
         run_coro(_do())
 
-    # небольшая задержка, чтобы loop точно поднялся
     run_coro(asyncio.sleep(0.05))
     _set_webhook_once()
 else:
