@@ -122,6 +122,8 @@ def payment_webhook():
             user_id = int(data.get("orderId"))
         except (TypeError, ValueError):
             user_id = None
+        
+        run_coro(_grant_access_and_send_link(user_id, plan, days))
 
         plan = (data.get("orderDescription") or data.get("description") or "").split()[0]
         _activate_subscription_and_unban(user_id, plan)
@@ -184,9 +186,31 @@ def _activate_subscription_and_unban(user_id: int | None, plan: str):
         session.close()
 
     # Разбан в канале асинхронно
-    run_coro(bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id))
-    log.info("Subscription granted & unban scheduled: user_id=%s plan=%s until=%s",
-             user_id, plan, expires.isoformat()+"Z")
+    async def _grant_access_and_send_link(user_id: int, plan: str, days: int):
+    # 1) разбан на случай, если пользователь был забанен ранее
+    try:
+        await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+    except Exception:
+        # если не был забанен — ок, продолжаем
+        pass
+
+    # 2) создаём персональную ссылку с ограничением по времени и по числу использований
+    #    Боту нужны права админа в канале с разрешением "Invite via Link"
+    expire_dt = datetime.utcnow() + timedelta(days=days)
+    invite = await bot.create_chat_invite_link(
+        chat_id=CHANNEL_ID,
+        name=f"{plan} {user_id}",
+        expire_date=expire_dt,   # aiogram принимает datetime
+        member_limit=1
+    )
+
+    # 3) отправляем ссылку пользователю
+    text = (
+        "✅ Оплата получена!\n\n"
+        f"Ваша ссылка на канал:\n{invite.invite_link}\n\n"
+        f"Действует до: {expire_dt:%d.%m.%Y %H:%M} UTC"
+    )
+    await bot.send_message(chat_id=user_id, text=text)
 
 
 # ── тех. эндпойнты ────────────────────────────────────────────────────────────
