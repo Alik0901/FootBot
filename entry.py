@@ -17,6 +17,12 @@ from app.payments import verify_signature
 from app.handlers import register_handlers
 from app.scheduler import start_scheduler  # <- используем колбэк on_expire
 
+PLAN_TO_DELTA = {
+    "Неделя": timedelta(days=7),
+    "Месяц": timedelta(days=30),
+    "Чат": timedelta(days=1),
+    "Тест1м": timedelta(minutes=1),  # ← вот тут магия
+}
 
 # ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -72,21 +78,19 @@ log.info("Flask app created")
 
 # ── выдача подписки и инвайта ─────────────────────────────────────────────────
 def _grant_subscription(user_id: int, plan: str):
-    days_map = {"Неделя": 7, "Месяц": 30, "Чат": 1}
-    days = days_map.get(plan, 0)
-    if not user_id or days <= 0:
+    delta = PLAN_TO_DELTA.get(plan)
+    if not user_id or not delta:
         log.warning("grant: invalid args user_id=%s plan=%s", user_id, plan)
         return
 
-    expires = datetime.utcnow() + timedelta(days=days)
-
-    session = SessionLocal()
-    try:
-        sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
-        session.add(sub)
-        session.commit()
-    finally:
-        session.close()
+    expires = datetime.utcnow() + delta
+    ...
+    invite = await bot.create_chat_invite_link(
+        chat_id=CHANNEL_ID,
+        name=f"{plan} {user_id}",
+        expire_date=expires,
+        member_limit=1,
+    )
 
     async def _unban_and_send():
         try:

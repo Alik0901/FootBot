@@ -66,7 +66,7 @@ def _remove_expired_subscriptions(on_expire: Callable[[int, str], None]) -> None
         session.close()
 
 
-def start_scheduler(on_expire: Callable[[int, str], None], interval_seconds: int = 60) -> BackgroundScheduler:
+def start_scheduler(on_expire: Callable[[int, str], None], interval_seconds: int = 5) -> BackgroundScheduler:
     """
     Запускает APScheduler. on_expire(user_id, plan) — колбэк, который кикает пользователя.
     """

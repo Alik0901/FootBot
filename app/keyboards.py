@@ -42,6 +42,9 @@ def plans_menu() -> InlineKeyboardMarkup:
     )
     keyboard.insert(
         InlineKeyboardButton('Чат 1 день — 50₽', callback_data='plan_chat')
+    )    
+    keyboard.insert(
+        InlineKeyboardButton('Тест 1 мин — 1₽', callback_data='plan_test1m')
     )
     keyboard.insert(
         InlineKeyboardButton('Назад', callback_data='back')
