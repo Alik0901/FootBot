@@ -1,17 +1,19 @@
 # entry.py
 import os
+import time
 import asyncio
 import threading
 import logging
 from datetime import datetime, timedelta
 
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, abort, render_template_string, url_for
 from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher import Dispatcher as AiogramDispatcher
 
 from app.models import init_db, SessionLocal, Subscription
-from app.payments import verify_signature  # убедись, что функция есть
+from app.payments import verify_signature  # убедись, что функция реально есть в app/payments.py
 from app.handlers import register_handlers
 from app.scheduler import start_scheduler
 
@@ -26,9 +28,10 @@ log = logging.getLogger("entry")
 
 # ── env ───────────────────────────────────────────────────────────────────────
 load_dotenv()
-TOKEN = os.getenv("TOKEN")
+TOKEN      = os.getenv("TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-BASE_URL = os.getenv("BASE_URL", "").rstrip("/")  # https://<proj>.up.railway.app
+BASE_URL   = (os.getenv("BASE_URL", "").rstrip("/"))  # например: https://<proj>.up.railway.app
+TEST_MODE  = os.getenv("TEST_MODE", "1") == "1"       # включит /testpay-заглушку
 
 if not TOKEN or not CHANNEL_ID:
     raise RuntimeError("Не заданы TOKEN или CHANNEL_ID")
@@ -42,7 +45,7 @@ log.info("Scheduler started")
 
 # ── aiogram ───────────────────────────────────────────────────────────────────
 bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+dp  = Dispatcher(bot)
 register_handlers(dp)
 log.info("Aiogram dispatcher ready")
 
@@ -50,7 +53,7 @@ log.info("Aiogram dispatcher ready")
 _loop = asyncio.new_event_loop()
 
 async def _process_update_with_ctx(update: types.Update):
-    # Привязываем текущие экземпляры к контексту aiogram
+    # Привязываем экземпляры к текущему контексту
     Bot.set_current(bot)
     AiogramDispatcher.set_current(dp)
     await dp.process_update(update)
@@ -70,6 +73,59 @@ def run_coro(coro):
 app = Flask(__name__)
 log.info("Flask app created")
 
+
+# ── общая функция выдачи подписки и инвайта ───────────────────────────────────
+def _grant_subscription(user_id: int, plan: str):
+    """Создаёт подписку в БД, разбанивает и шлёт инвайт в канал (member_limit=1)."""
+    days_map = {"Неделя": 7, "Месяц": 30, "Чат": 1}
+    days = days_map.get(plan, 0)
+    if not user_id or days <= 0:
+        log.warning("grant: invalid args user_id=%s plan=%s", user_id, plan)
+        return
+
+    expires = datetime.utcnow() + timedelta(days=days)
+
+    # БД
+    session = SessionLocal()
+    try:
+        sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
+        session.add(sub)
+        session.commit()
+    finally:
+        session.close()
+
+    async def _unban_and_send():
+        # подстраховка: разбан
+        try:
+            await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        except Exception:
+            pass
+
+        # персональная пригласительная ссылка (1 использ., с истечением)
+        invite = await bot.create_chat_invite_link(
+            chat_id=CHANNEL_ID,
+            name=f"{plan} {user_id}",
+            expire_date=expires,   # aiogram принимает datetime
+            member_limit=1,
+        )
+        text = (
+            "✅ Оплата получена!\n\n"
+            f"Ваша ссылка в канал:\n{invite.invite_link}\n\n"
+            f"Действует до: {expires:%d.%m.%Y %H:%M} UTC"
+        )
+        try:
+            await bot.send_message(chat_id=user_id, text=text)
+        except Exception as e:
+            log.warning("send_message failed for user %s: %s", user_id, e)
+
+    run_coro(_unban_and_send())
+    log.info(
+        "Subscription granted & unban scheduled: user_id=%s plan=%s until=%s",
+        user_id, plan, expires.isoformat() + "Z"
+    )
+
+
+# ── Telegram webhook ──────────────────────────────────────────────────────────
 @app.post("/telegram_webhook")
 def telegram_webhook():
     payload = request.get_json(silent=True) or {}
@@ -88,6 +144,7 @@ def telegram_webhook():
     return jsonify(ok=True), 200
 
 
+# ── WATA payment webhook ──────────────────────────────────────────────────────
 @app.post("/payment_webhook")
 def payment_webhook():
     raw = request.get_data()
@@ -104,48 +161,47 @@ def payment_webhook():
             user_id = int(data.get("orderId"))
         except (TypeError, ValueError):
             user_id = None
-
         plan = (data.get("description") or "").split()[0]
-        days = {"Неделя": 7, "Месяц": 30, "Чат": 1}.get(plan, 0)
-
-        if user_id and days > 0:
-            expires = datetime.utcnow() + timedelta(days=days)
-            session = SessionLocal()
-            try:
-                sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
-                session.add(sub)
-                session.commit()
-            finally:
-                session.close()
-
-            async def _grant_access_and_send_link():
-                # на всякий случай разбан
-                try:
-                    await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
-                except Exception:
-                    pass
-                # персональная инвайт-ссылка
-                expire_dt = datetime.utcnow() + timedelta(days=days)
-                invite = await bot.create_chat_invite_link(
-                    chat_id=CHANNEL_ID,
-                    name=f"{plan} {user_id}",
-                    expire_date=expire_dt,
-                    member_limit=1,
-                )
-                text = (
-                    "✅ Оплата получена!\n\n"
-                    f"Ссылка на канал:\n{invite.invite_link}\n\n"
-                    f"Действует до: {expire_dt:%d.%m.%Y %H:%M} UTC"
-                )
-                await bot.send_message(chat_id=user_id, text=text)
-
-            run_coro(_grant_access_and_send_link())
-            log.info(
-                "Subscription granted & unban scheduled: user_id=%s plan=%s until=%s",
-                user_id, plan, expires.isoformat() + "Z"
-            )
+        _grant_subscription(user_id, plan)
 
     return jsonify(ok=True), 200
+
+
+# ── тестовая заглушка оплаты (/testpay) ───────────────────────────────────────
+if TEST_MODE:
+    @app.get("/testpay")
+    def testpay_page():
+        user_id  = request.args.get("user_id", type=int)
+        plan     = request.args.get("plan", type=str) or "Не указан"
+        amount   = request.args.get("amount", type=float)
+        order_id = request.args.get("orderId") or f"tg-{user_id}-{int(time.time())}"
+
+        html = """
+        <!doctype html><meta charset="utf-8">
+        <title>Тестовая оплата</title>
+        <h2>Тестовая оплата</h2>
+        <p>Пользователь: <b>{{ user_id }}</b></p>
+        <p>План: <b>{{ plan }}</b> — сумма: <b>{{ amount or "?" }} ₽</b></p>
+        <p>orderId: <code>{{ order_id }}</code></p>
+        <p>
+          <a href="{{ url_for('testpay_success', user_id=user_id, plan=plan, orderId=order_id) }}">✅ Оплатить (успех)</a>
+          &nbsp;&nbsp;
+          <a href="{{ url_for('testpay_fail') }}">❌ Отмена</a>
+        </p>
+        """
+        return render_template_string(html, user_id=user_id, plan=plan, amount=amount, order_id=order_id)
+
+    @app.get("/testpay/success")
+    def testpay_success():
+        user_id = request.args.get("user_id", type=int)
+        plan    = request.args.get("plan", type=str)
+        _grant_subscription(user_id, plan)
+        return "<h3>Оплата смоделирована как УСПЕШНАЯ. Вернитесь в бота.</h3>", 200
+
+    @app.get("/testpay/fail")
+    def testpay_fail():
+        return "<h3>Оплата смоделирована как ОТМЕНЁННАЯ.</h3>", 200
+
 
 # ── тех. эндпойнты ────────────────────────────────────────────────────────────
 @app.get("/health")
@@ -160,9 +216,9 @@ def root():
 def favicon():
     return ("", 204, {"Cache-Control": "public, max-age=86400"})
 
+
 # ── автосоздание вебхука ──────────────────────────────────────────────────────
 WEBHOOK_URL = f"{BASE_URL}/telegram_webhook" if BASE_URL else ""
-
 if WEBHOOK_URL:
     def _set_webhook_once():
         async def _do():
