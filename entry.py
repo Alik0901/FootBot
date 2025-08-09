@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, abort
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
+from aiogram.dispatcher import Dispatcher as AiogramDispatcher
+
 
 from app.models import init_db, SessionLocal, Subscription
 from app.payments import verify_signature
@@ -48,6 +50,12 @@ log.info("Aiogram dispatcher ready")
 # ── общий asyncio-loop в отдельном потоке ─────────────────────────────────────
 _loop = asyncio.new_event_loop()
 
+async def _process_update_with_ctx(update: types.Update):
+    # Привязываем текущие экземпляры к контексту aiogram
+    Bot.set_current(bot)
+    AiogramDispatcher.set_current(dp)
+    await dp.process_update(update)
+
 def _loop_worker():
     asyncio.set_event_loop(_loop)
     log.info("Background asyncio loop started")
@@ -73,7 +81,7 @@ def telegram_webhook():
         return jsonify(ok=False), 200
 
     try:
-        run_coro(dp.process_update(update))
+        run_coro(_process_update_with_ctx(update))   # <-- здесь
     except Exception:
         log.exception("Failed to schedule update")
         return jsonify(ok=False), 200
