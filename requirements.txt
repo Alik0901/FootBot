@@ -7,3 +7,4 @@ apscheduler
 requests
 python-dotenv
 gunicorn
+cryptography>=41.0.0
