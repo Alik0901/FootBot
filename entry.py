@@ -21,7 +21,7 @@ PLAN_TO_DELTA = {
     "Неделя": timedelta(days=7),
     "Месяц": timedelta(days=30),
     "Чат": timedelta(days=1),
-    "Тест1м": timedelta(minutes=1),  # ← вот тут магия
+    "Тест1м": timedelta(minutes=1),
 }
 
 # ── logging ───────────────────────────────────────────────────────────────────
@@ -84,23 +84,28 @@ def _grant_subscription(user_id: int, plan: str):
         return
 
     expires = datetime.utcnow() + delta
-    ...
-    invite = await bot.create_chat_invite_link(
-        chat_id=CHANNEL_ID,
-        name=f"{plan} {user_id}",
-        expire_date=expires,
-        member_limit=1,
-    )
+
+    # записываем в БД
+    session = SessionLocal()
+    try:
+        sub = Subscription(user_id=user_id, plan=plan, expires_at=expires)
+        session.add(sub)
+        session.commit()
+    finally:
+        session.close()
 
     async def _unban_and_send():
+        # разбан на всякий случай
         try:
             await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         except Exception:
             pass
+
+        # создаём персональную ссылку
         invite = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
             name=f"{plan} {user_id}",
-            expire_date=expires,
+            expire_date=expires,   # datetime ок
             member_limit=1,
         )
         text = (
@@ -113,6 +118,7 @@ def _grant_subscription(user_id: int, plan: str):
         except Exception as e:
             log.warning("send_message failed for user %s: %s", user_id, e)
 
+    # ВАЖНО: запускаем корутину через общий loop
     run_coro(_unban_and_send())
     log.info("Subscription granted: user_id=%s plan=%s until=%s",
              user_id, plan, expires.isoformat() + "Z")
