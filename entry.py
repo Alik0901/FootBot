@@ -14,22 +14,10 @@ from app.handlers import register_handlers
 from app.scheduler import start_scheduler
 
 import logging
-# entry.py
-import os
-import asyncio
-import logging
-from datetime import datetime, timedelta
 
-from flask import Flask, request, jsonify, abort
-from dotenv import load_dotenv
-
-from aiogram import Bot, Dispatcher, types
-
-# your imports...
-# from app.models import ...
-# from app.payments import ...
-# from app.handlers import ...
-# from app.scheduler import ...
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("entry")
+logger.setLevel(logging.DEBUG)
 
 # ─── Logging setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -67,17 +55,24 @@ logger.info("Aiogram dispatcher ready")
 app = Flask(__name__)
 logger.info("Flask app created")
 
-@app.route("/telegram_webhook", methods=["POST"])
+@app.post("/telegram_webhook")
 def telegram_webhook():
-    data = request.json or {}
-    logger.debug(f"/telegram_webhook payload: {data}")
+    logger.debug("Webhook hit: headers=%s", dict(request.headers))
+    payload = request.get_json(silent=True, force=True) or {}
+    logger.debug("Webhook payload: %s", payload)
+
     try:
-        update = types.Update(**data)
-        asyncio.create_task(dp.process_update(update))
-        logger.debug("Dispatched update to Aiogram")
+        update = types.Update(**payload)
+        # Выполняем корутину синхронно в этом запросе
+        asyncio.run(dp.process_update(update))
+        logger.debug("Update processed OK")
+        # Telegram важно просто получить 200 быстро
+        return jsonify({"ok": True}), 200
     except Exception as e:
-        logger.exception("Failed to process update")
-    return jsonify(ok=True)
+        logger.exception("Webhook processing error: %s", e)
+        # Всё равно отвечаем 200, чтобы TG не ретраил бесконечно,
+        # иначе вас могут заддосить ретраями
+        return jsonify({"ok": False}), 200
 
 @app.route("/payment_webhook", methods=["POST"])
 def payment_webhook():
