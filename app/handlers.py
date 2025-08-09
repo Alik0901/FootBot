@@ -1,33 +1,35 @@
 # app/handlers.py
 import os
 import logging
+from datetime import datetime
 from requests.exceptions import HTTPError
 
 from aiogram import types, Dispatcher
 from app.payments import create_invoice
 from app.keyboards import main_menu, plans_menu
+from app.models import SessionLocal, Subscription
 
 log = logging.getLogger("handlers")
 
-# Тарифы: callback_data -> (Название, Сумма, Дни)
 PLAN_MAP = {
     "plan_week":   ("Неделя", 100.0, 7),
     "plan_month":  ("Месяц",  300.0, 30),
     "plan_chat":   ("Чат",     50.0, 1),
-    "plan_test1m": ("Тест1м",   1.0, 0),  # дни не используем (берём из PLAN_TO_DELTA)
+    "plan_test1m": ("Тест1м",   1.0, 0),
 }
 
-APP_BASE_URL = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
+APP_BASE_URL   = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
+ADMIN_CONTACT  = os.getenv("ADMIN_CONTACT", "@YourAdmin")  # контакт для помощи
 
 
 def register_handlers(dp: Dispatcher):
     dp.register_message_handler(cmd_start, commands=['start'])
 
-    # Кнопки главного меню
-    dp.register_callback_query_handler(cb_buy,  lambda c: c.data == 'buy')
-    dp.register_callback_query_handler(cb_back, lambda c: c.data == 'back')
+    dp.register_callback_query_handler(cb_buy,     lambda c: c.data == 'buy')
+    dp.register_callback_query_handler(cb_my_subs, lambda c: c.data == 'my_subs')
+    dp.register_callback_query_handler(cb_help,    lambda c: c.data == 'help')
+    dp.register_callback_query_handler(cb_back,    lambda c: c.data == 'back')
 
-    # Выбор плана
     dp.register_callback_query_handler(process_plan, lambda c: c.data in PLAN_MAP)
 
 
@@ -42,12 +44,53 @@ async def cb_buy(callback: types.CallbackQuery):
     await callback.answer()
 
 
+async def cb_my_subs(callback: types.CallbackQuery):
+    """Показывает активные подписки пользователя."""
+    log.info("cb_my_subs from user=%s", callback.from_user.id)
+    session = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        subs = (
+            session.query(Subscription)
+            .filter(Subscription.user_id == callback.from_user.id)
+            .order_by(Subscription.expires_at.desc())
+            .all()
+        )
+
+        if not subs:
+            text = "У вас нет оформленных подписок."
+        else:
+            lines = []
+            for sub in subs:
+                status = "✅ Активна" if sub.expires_at > now else "⏰ Истекла"
+                lines.append(f"• {sub.plan} — до {sub.expires_at:%d.%m.%Y %H:%M} UTC ({status})")
+            text = "Ваши подписки:\n\n" + "\n".join(lines)
+
+        await callback.message.edit_text(text, reply_markup=main_menu())
+    except Exception as e:
+        log.exception("Failed to fetch subscriptions for user=%s", callback.from_user.id)
+        await callback.message.edit_text("Ошибка при получении данных о подписках.", reply_markup=main_menu())
+    finally:
+        session.close()
+    await callback.answer()
+
+
+async def cb_help(callback: types.CallbackQuery):
+    """Отправка информации о помощи и контакте администратора."""
+    log.info("cb_help from user=%s", callback.from_user.id)
+    text = (
+        "Если у вас возникли вопросы или проблемы с подпиской, свяжитесь с администратором канала:\n"
+        f"{ADMIN_CONTACT}"
+    )
+    await callback.message.edit_text(text, reply_markup=main_menu())
+    await callback.answer()
+
+
 async def cb_back(callback: types.CallbackQuery):
     await callback.message.edit_text("Возвращаюсь в главное меню:", reply_markup=main_menu())
     await callback.answer()
 
 
-# helper: вызвать sync create_invoice без блокировки event loop
 async def _create_invoice_async(*args, **kwargs):
     import asyncio
     loop = asyncio.get_running_loop()
