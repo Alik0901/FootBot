@@ -21,7 +21,7 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True, nullable=False)
+    user_id = Column(BigInteger, index=True, nullable=False)
     plan = Column(String, nullable=False)
     expires_at = Column(DateTime, nullable=False)
 
