@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 5000
 
 # ВСЁ В ОДНУ СТРОКУ:
-CMD ["gunicorn","entry:app","--workers","1","--threads","8","--bind","0.0.0.0:5000","--capture-output","--log-level","debug"]
+EXPOSE 5000
+CMD ["gunicorn", "-c", "gunicorn_conf.py", "entry:app"]
 
 
