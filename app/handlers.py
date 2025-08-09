@@ -2,6 +2,7 @@
 import os
 import logging
 from datetime import datetime
+from typing import Dict, Optional
 from requests.exceptions import HTTPError
 
 from aiogram import types, Dispatcher
@@ -20,18 +21,19 @@ PLAN_MAP = {
 
 APP_BASE_URL  = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
 ADMIN_CONTACT = os.getenv("ADMIN_CONTACT", "@YourAdmin")
-CLUB_NAME     = os.getenv("CLUB_NAME", "FOOT SECRET CLUB")  # название клуба для заголовка
+CLUB_NAME     = os.getenv("CLUB_NAME", "FOOT SECRET CLUB")
+
+# запоминаем последнее "служебное" сообщение для каждого пользователя
+_LAST_INFO_MSG: Dict[int, int] = {}  # user_id -> message_id
 
 
 def _admin_contact_text() -> str:
-    # Если дали ссылку — делаем кликабельной; если @username — оставляем как есть
     if ADMIN_CONTACT.startswith("http"):
         return f'<a href="{ADMIN_CONTACT}">{ADMIN_CONTACT}</a>'
     return ADMIN_CONTACT
 
 
 def _welcome_text() -> str:
-    # HTML‑верстка приветствия
     return (
         f'🔥 <b>ДОБРО ПОЖАЛОВАТЬ В «[ {CLUB_NAME} ]»!</b> 🔥\n'
         f'<i>(Твой ежедневный сериал, где главные роли играют… ножки…)</i>\n\n'
@@ -44,9 +46,40 @@ def _welcome_text() -> str:
     )
 
 
+async def _send_ephemeral(cb_or_msg: types.Union[types.CallbackQuery, types.Message],
+                          text: str,
+                          *,
+                          parse_mode: Optional[str] = "HTML",
+                          reply_markup: Optional[types.InlineKeyboardMarkup] = None) -> None:
+    """
+    Отправляет новое 'служебное' сообщение и старается удалить предыдущее для этого пользователя.
+    Главное меню/приветствие НЕ трогаем.
+    """
+    if isinstance(cb_or_msg, types.CallbackQuery):
+        chat_id = cb_or_msg.message.chat.id
+        user_id = cb_or_msg.from_user.id
+        bot = cb_or_msg.message.bot
+    else:
+        chat_id = cb_or_msg.chat.id
+        user_id = cb_or_msg.from_user.id
+        bot = cb_or_msg.bot
+
+    # удалить прошлое служебное сообщение, если было
+    prev_id = _LAST_INFO_MSG.get(user_id)
+    if prev_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=prev_id)
+        except Exception as e:
+            log.debug("delete previous info msg failed user=%s: %s", user_id, e)
+
+    sent = await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+    _LAST_INFO_MSG[user_id] = sent.message_id
+
+
 def register_handlers(dp: Dispatcher):
     dp.register_message_handler(cmd_start, commands=['start'])
 
+    # Главное меню: отправляем отдельно, ничего не редактируем
     dp.register_callback_query_handler(cb_buy,      lambda c: c.data == 'buy')
     dp.register_callback_query_handler(cb_my_subs,  lambda c: c.data == 'my_subs')
     dp.register_callback_query_handler(cb_bonuses,  lambda c: c.data == 'bonuses')
@@ -57,18 +90,21 @@ def register_handlers(dp: Dispatcher):
 
 
 async def cmd_start(message: types.Message):
-    log.info("cmd_start chat_id=%s", message.chat.id)
+    # фиксируем неизменяемое приветствие + главное меню ОДНИМ сообщением
     await message.answer(_welcome_text(), reply_markup=main_menu(), parse_mode="HTML")
+    # очищаем трекер служебного сообщения для юзера (если было)
+    _LAST_INFO_MSG.pop(message.from_user.id, None)
 
+
+# === Кнопки главного меню (все — через _send_ephemeral) =======================
 
 async def cb_buy(callback: types.CallbackQuery):
     log.info("cb_buy from user=%s", callback.from_user.id)
-    await callback.message.edit_text("Выберите тарифный план:", reply_markup=plans_menu())
+    await _send_ephemeral(callback, "Выберите тарифный план:", reply_markup=plans_menu(), parse_mode=None)
     await callback.answer()
 
 
 async def cb_my_subs(callback: types.CallbackQuery):
-    """Показывает активные/истёкшие подписки пользователя."""
     log.info("cb_my_subs from user=%s", callback.from_user.id)
     session = SessionLocal()
     try:
@@ -89,45 +125,45 @@ async def cb_my_subs(callback: types.CallbackQuery):
                 lines.append(f"• {sub.plan} — до {sub.expires_at:%d.%m.%Y %H:%M} UTC ({status})")
             text = "Ваши подписки:\n\n" + "\n".join(lines)
 
-        await callback.message.edit_text(text, reply_markup=main_menu())
+        await _send_ephemeral(callback, text, parse_mode=None)
     except Exception:
         log.exception("Failed to fetch subscriptions for user=%s", callback.from_user.id)
-        await callback.message.edit_text("Ошибка при получении данных о подписках.", reply_markup=main_menu())
+        await _send_ephemeral(callback, "Ошибка при получении данных о подписках.", parse_mode=None)
     finally:
         session.close()
     await callback.answer()
 
 
 async def cb_bonuses(callback: types.CallbackQuery):
-    """Заглушка под бонусы/акции — можешь заменить на актуальные условия."""
     text = (
         "🎁 <b>Бонусы и акции</b>\n\n"
         "— Приведи друга и получи +1 день к подписке.\n"
-        "— Скидка 50% на первый месяц для новых пользователей (по промокоду <b>FIRST50</b>).\n\n"
+        "— Скидка 50% на первый месяц для новых пользователей (промокод <b>FIRST50</b>).\n\n"
         "Подробности у администратора: " + _admin_contact_text()
     )
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    await _send_ephemeral(callback, text, parse_mode="HTML")
     await callback.answer()
 
 
 async def cb_help(callback: types.CallbackQuery):
-    """Информация о помощи и контакте администратора."""
     log.info("cb_help from user=%s", callback.from_user.id)
     text = (
         "🆘 <b>Помощь</b>\n\n"
         "Если возникли вопросы или проблемы с подпиской, напишите администратору:\n"
         f"{_admin_contact_text()}"
     )
-    await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
+    await _send_ephemeral(callback, text, parse_mode="HTML")
     await callback.answer()
 
 
 async def cb_back(callback: types.CallbackQuery):
-    await callback.message.edit_text("Главное меню:", reply_markup=main_menu())
+    # Просто подсказка пользователю, что главное меню выше
+    await _send_ephemeral(callback, "Используйте кнопки главного меню выше ⬆️", parse_mode=None)
     await callback.answer()
 
 
-# ----- оплата -----
+# === Оплата ===================================================================
+
 async def _create_invoice_async(*args, **kwargs):
     import asyncio
     loop = asyncio.get_running_loop()
@@ -154,16 +190,16 @@ async def process_plan(callback: types.CallbackQuery):
         pay_url = invoice.get("url")
     except HTTPError as e:
         log.warning("create_invoice HTTPError: %s", e, exc_info=True)
-        await callback.message.answer("❗️ Не удалось создать счёт. Попробуйте чуть позже.")
+        await _send_ephemeral(callback, "❗️ Не удалось создать счёт. Попробуйте чуть позже.")
         await callback.answer(); return
     except Exception as e:
         log.exception("create_invoice failed: %s", e)
-        await callback.message.answer("❗️ Произошла ошибка при создании счёта.")
+        await _send_ephemeral(callback, "❗️ Произошла ошибка при создании счёта.")
         await callback.answer(); return
 
     if not pay_url:
-        await callback.message.answer("❗️ Платёжная ссылка не получена.")
+        await _send_ephemeral(callback, "❗️ Платёжная ссылка не получена.")
         await callback.answer(); return
 
-    await callback.message.answer(f"Счёт на {amount:.2f}₽:\n{pay_url}")
+    await _send_ephemeral(callback, f"Счёт на {amount:.2f}₽:\n{pay_url}", parse_mode=None)
     await callback.answer()
