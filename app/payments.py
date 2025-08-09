@@ -1,71 +1,41 @@
+# app/payments.py
 import os
-import base64
 import requests
 
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import padding
+WATA_BASE_URL = os.getenv("WATA_BASE_URL", "https://api-sandbox.wata.pro/api/h2h").rstrip("/")
+WATA_TOKEN    = os.getenv("WATA_TOKEN")
+APP_BASE_URL  = os.getenv("APP_BASE_URL", "").rstrip("/")
+MODE          = os.getenv("PAYMENTS_MODE", "real")  # 'real' | 'mock'
 
-# WATA API settings from environment
-API_BASE_URL = os.getenv("WATA_API_BASE_URL", "https://api.wata.pro/api/h2h")
-ACCESS_TOKEN = os.getenv("WATA_ACCESS_TOKEN")
-CURRENCY = os.getenv("WATA_CURRENCY", "RUB")
+def create_invoice(user_id: int, amount: float, plan: str,
+                   success_url: str | None = None,
+                   fail_url: str | None = None,
+                   order_id: str | None = None) -> dict:
+    # MOCK: без токена или явно включен mock — отдаём тестовую ссылку
+    if MODE == "mock" or not WATA_TOKEN:
+        if not APP_BASE_URL:
+            raise RuntimeError("APP_BASE_URL is required in mock mode")
+        link = f"{APP_BASE_URL}/testpay?user_id={user_id}&plan={plan}&amount={amount:.2f}&orderId={order_id or user_id}"
+        return {"id": "mock", "url": link, "status": "Opened"}
 
-# Load and cache public key for webhook signature verification
-def _load_public_key():
-    """
-    Загружает публичный ключ от WATA для проверки подписи уведомлений.
-    Возвращает объект публичного ключа.
-    """
-    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}"}
-    resp = requests.get(f"{API_BASE_URL}/public-key", headers=headers)
-    resp.raise_for_status()
-    pem = resp.json().get("value")
-    return serialization.load_pem_public_key(pem.encode())
-
-_public_key = _load_public_key()
-
-
-def verify_signature(raw_body: bytes, signature: str) -> bool:
-    """
-    Проверяет подпись уведомления WATA по RSA SHA512.
-    :param raw_body: байты тела запроса
-    :param signature: подпись из заголовка X-Signature (base64)
-    :return: True, если подпись валидна
-    """
-    try:
-        sig_bytes = base64.b64decode(signature)
-        _public_key.verify(
-            sig_bytes,
-            raw_body,
-            padding.PKCS1v15(),
-            hashes.SHA512()
-        )
-        return True
-    except Exception:
-        return False
-
-
-def create_invoice(user_id: int, amount: float, plan: str, base_url: str) -> dict:
-    """
-    Создает платёжную ссылку в WATA.
-    :param user_id: Telegram user id
-    :param amount: сумма к оплате
-    :param plan: описание плана (например, "Месяц")
-    :param base_url: URL приложения для редиректов
-    :return: JSON-ответ от WATA API с ключём 'url'
-    """
+    # REAL: sandbox/prod WATA
+    url = f"{WATA_BASE_URL}/links"
     payload = {
-        "amount": float(amount),
-        "currency": CURRENCY,
-        "description": f"{plan} подписка для user {user_id}",
-        "orderId": str(user_id),
-        "successRedirectUrl": f"{base_url}/success?user_id={user_id}&plan={plan}",
-        "failRedirectUrl": f"{base_url}/fail?user_id={user_id}&plan={plan}"
+        "amount": float(f"{amount:.2f}"),
+        "currency": "RUB",
+        "description": f"{plan} user {user_id}",
+        "orderId": str(order_id or user_id),
     }
+    if success_url: payload["successRedirectUrl"] = success_url
+    if fail_url:    payload["failRedirectUrl"]    = fail_url
+
     headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {WATA_TOKEN}",
+        "Content-Type": "application/json",
     }
-    resp = requests.post(f"{API_BASE_URL}/links", json=payload, headers=headers)
-    resp.raise_for_status()
+    resp = requests.post(url, json=payload, headers=headers, timeout=15)
+    if resp.status_code >= 400:
+        try: detail = resp.json()
+        except Exception: detail = resp.text
+        raise requests.HTTPError(f"{resp.status_code} {resp.reason} at {url} -> {detail}", response=resp)
     return resp.json()
