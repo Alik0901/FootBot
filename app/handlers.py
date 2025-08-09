@@ -2,7 +2,7 @@
 import os
 import logging
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Union  # <-- берём Union здесь
 from requests.exceptions import HTTPError
 
 from aiogram import types, Dispatcher
@@ -23,8 +23,8 @@ APP_BASE_URL  = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
 ADMIN_CONTACT = os.getenv("ADMIN_CONTACT", "@YourAdmin")
 CLUB_NAME     = os.getenv("CLUB_NAME", "FOOT SECRET CLUB")
 
-# запоминаем последнее "служебное" сообщение для каждого пользователя
-_LAST_INFO_MSG: Dict[int, int] = {}  # user_id -> message_id
+# user_id -> last info message_id
+_LAST_INFO_MSG: Dict[int, int] = {}
 
 
 def _admin_contact_text() -> str:
@@ -46,14 +46,16 @@ def _welcome_text() -> str:
     )
 
 
-async def _send_ephemeral(cb_or_msg: types.Union[types.CallbackQuery, types.Message],
-                          text: str,
-                          *,
-                          parse_mode: Optional[str] = "HTML",
-                          reply_markup: Optional[types.InlineKeyboardMarkup] = None) -> None:
+async def _send_ephemeral(
+    cb_or_msg: Union[types.CallbackQuery, types.Message],
+    text: str,
+    *,
+    parse_mode: Optional[str] = "HTML",
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+) -> None:
     """
-    Отправляет новое 'служебное' сообщение и старается удалить предыдущее для этого пользователя.
-    Главное меню/приветствие НЕ трогаем.
+    Шлёт новое 'служебное' сообщение и старается удалить предыдущее для этого пользователя.
+    Главное приветствие/меню не трогаем.
     """
     if isinstance(cb_or_msg, types.CallbackQuery):
         chat_id = cb_or_msg.message.chat.id
@@ -64,7 +66,6 @@ async def _send_ephemeral(cb_or_msg: types.Union[types.CallbackQuery, types.Mess
         user_id = cb_or_msg.from_user.id
         bot = cb_or_msg.bot
 
-    # удалить прошлое служебное сообщение, если было
     prev_id = _LAST_INFO_MSG.get(user_id)
     if prev_id:
         try:
@@ -79,7 +80,6 @@ async def _send_ephemeral(cb_or_msg: types.Union[types.CallbackQuery, types.Mess
 def register_handlers(dp: Dispatcher):
     dp.register_message_handler(cmd_start, commands=['start'])
 
-    # Главное меню: отправляем отдельно, ничего не редактируем
     dp.register_callback_query_handler(cb_buy,      lambda c: c.data == 'buy')
     dp.register_callback_query_handler(cb_my_subs,  lambda c: c.data == 'my_subs')
     dp.register_callback_query_handler(cb_bonuses,  lambda c: c.data == 'bonuses')
@@ -90,13 +90,9 @@ def register_handlers(dp: Dispatcher):
 
 
 async def cmd_start(message: types.Message):
-    # фиксируем неизменяемое приветствие + главное меню ОДНИМ сообщением
     await message.answer(_welcome_text(), reply_markup=main_menu(), parse_mode="HTML")
-    # очищаем трекер служебного сообщения для юзера (если было)
     _LAST_INFO_MSG.pop(message.from_user.id, None)
 
-
-# === Кнопки главного меню (все — через _send_ephemeral) =======================
 
 async def cb_buy(callback: types.CallbackQuery):
     log.info("cb_buy from user=%s", callback.from_user.id)
@@ -157,12 +153,9 @@ async def cb_help(callback: types.CallbackQuery):
 
 
 async def cb_back(callback: types.CallbackQuery):
-    # Просто подсказка пользователю, что главное меню выше
     await _send_ephemeral(callback, "Используйте кнопки главного меню выше ⬆️", parse_mode=None)
     await callback.answer()
 
-
-# === Оплата ===================================================================
 
 async def _create_invoice_async(*args, **kwargs):
     import asyncio
