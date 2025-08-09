@@ -3,13 +3,11 @@ import os
 import time
 import base64
 import requests
-
 from typing import Optional
 
-# ── WATA endpoints ────────────────────────────────────────────────────────────
 WATA_BASE_URL = os.getenv("WATA_BASE_URL", "https://api-sandbox.wata.pro/api/h2h").rstrip("/")
 WATA_TOKEN    = os.getenv("WATA_TOKEN")
-APP_BASE_URL  = os.getenv("APP_BASE_URL", "").rstrip("/")
+APP_BASE_URL  = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "")).rstrip("/")
 MODE          = os.getenv("PAYMENTS_MODE", "real").lower()  # 'real' | 'mock'
 
 PUBLIC_KEY_URL = os.getenv("WATA_PUBLIC_KEY_URL", f"{WATA_BASE_URL}/public-key")
@@ -17,6 +15,7 @@ PUBLIC_KEY_URL = os.getenv("WATA_PUBLIC_KEY_URL", f"{WATA_BASE_URL}/public-key")
 # ── Public key cache ──────────────────────────────────────────────────────────
 _PUBKEY_CACHE = {"pem": None, "ts": 0.0}
 _PUBKEY_TTL   = 600.0  # 10 минут
+
 
 def _fetch_public_key_pem() -> str:
     now = time.time()
@@ -33,6 +32,7 @@ def _fetch_public_key_pem() -> str:
     _PUBKEY_CACHE["ts"] = now
     return pem
 
+
 def verify_signature(raw_body: bytes, signature_b64: str) -> bool:
     """
     Проверка X-Signature (RSA+SHA512) входящего webhook’а WATA.
@@ -42,7 +42,6 @@ def verify_signature(raw_body: bytes, signature_b64: str) -> bool:
         return True
 
     try:
-        # лениво импортируем cryptography, чтобы не тянуть её вне рантайма
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import padding
 
@@ -61,7 +60,6 @@ def verify_signature(raw_body: bytes, signature_b64: str) -> bool:
         return False
 
 
-# ── Invoice creation ──────────────────────────────────────────────────────────
 def create_invoice(
     user_id: int,
     amount: float,
@@ -77,8 +75,11 @@ def create_invoice(
     # MOCK: без токена или явно включен mock → своя тестовая ссылка
     if MODE == "mock" or not WATA_TOKEN:
         if not APP_BASE_URL:
-            raise RuntimeError("APP_BASE_URL is required in mock mode")
-        link = f"{APP_BASE_URL}/testpay?user_id={user_id}&plan={plan}&amount={amount:.2f}&orderId={order_id or user_id}"
+            raise RuntimeError("APP_BASE_URL or BASE_URL is required in mock mode")
+        link = (
+            f"{APP_BASE_URL}/testpay"
+            f"?user_id={user_id}&plan={plan}&amount={amount:.2f}&orderId={order_id or user_id}"
+        )
         return {"id": "mock", "url": link, "status": "Opened"}
 
     # REAL: sandbox/prod WATA

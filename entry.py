@@ -4,9 +4,9 @@ import time
 import asyncio
 import threading
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from flask import Flask, request, jsonify, abort, render_template_string, url_for
+from flask import Flask, request, jsonify, abort, render_template_string
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types
@@ -83,6 +83,7 @@ def _grant_subscription(user_id: int, plan: str):
         log.warning("grant: invalid args user_id=%s plan=%s", user_id, plan)
         return
 
+    # naive UTC
     expires = datetime.utcnow() + delta
 
     # записываем в БД
@@ -95,19 +96,22 @@ def _grant_subscription(user_id: int, plan: str):
         session.close()
 
     async def _unban_and_send():
-        # разбан на всякий случай
+        # на случай повторной оплаты — снимаем бан
         try:
             await bot.unban_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         except Exception:
             pass
 
-        # создаём персональную ссылку
+        # Telegram API ожидает unix ts (int) для expire_date
+        expire_ts = int(expires.replace(tzinfo=timezone.utc).timestamp())
+
         invite = await bot.create_chat_invite_link(
             chat_id=CHANNEL_ID,
             name=f"{plan} {user_id}",
-            expire_date=expires,   # datetime ок
+            expire_date=expire_ts,
             member_limit=1,
         )
+
         text = (
             "✅ Оплата получена!\n\n"
             f"Ссылка в канал:\n{invite.invite_link}\n\n"
@@ -118,7 +122,6 @@ def _grant_subscription(user_id: int, plan: str):
         except Exception as e:
             log.warning("send_message failed for user %s: %s", user_id, e)
 
-    # ВАЖНО: запускаем корутину через общий loop
     run_coro(_unban_and_send())
     log.info("Subscription granted: user_id=%s plan=%s until=%s",
              user_id, plan, expires.isoformat() + "Z")
@@ -181,10 +184,16 @@ def payment_webhook():
 
     if data.get("status") == "Closed":
         try:
-            user_id = int(data.get("orderId"))
-        except (TypeError, ValueError):
-            user_id = None
-        plan = (data.get("description") or "").split()[0]
+            user_id = int((data.get("orderId") or "").split("-")[1])
+        except Exception:
+            # если orderId — просто tg_id
+            try:
+                user_id = int(data.get("orderId"))
+            except Exception:
+                user_id = None
+
+        desc = data.get("description") or ""
+        plan  = desc.split()[0] if desc else None
         _grant_subscription(user_id, plan)
 
     return jsonify(ok=True), 200
@@ -207,9 +216,9 @@ if TEST_MODE:
         <p>План: <b>{{ plan }}</b> — сумма: <b>{{ amount or "?" }} ₽</b></p>
         <p>orderId: <code>{{ order_id }}</code></p>
         <p>
-          <a href="{{ url_for('testpay_success', user_id=user_id, plan=plan, orderId=order_id) }}">✅ Оплатить (успех)</a>
+          <a href="/testpay/success?user_id={{ user_id }}&plan={{ plan }}&orderId={{ order_id }}">✅ Оплатить (успех)</a>
           &nbsp;&nbsp;
-          <a href="{{ url_for('testpay_fail') }}">❌ Отмена</a>
+          <a href="/testpay/fail">❌ Отмена</a>
         </p>
         """
         return render_template_string(html, user_id=user_id, plan=plan, amount=amount, order_id=order_id)

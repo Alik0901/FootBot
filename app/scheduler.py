@@ -16,28 +16,26 @@ def _remove_expired_subscriptions(on_expire: Callable[[int, str], None]) -> None
     """
     Находит юзеров, у которых НЕТ активных подписок на сейчас,
     и отключает доступ через on_expire(user_id, last_plan).
-    Затем удаляет их истекшие записи (или можно помечать как processed).
+    Затем удаляет их истекшие записи.
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)  # храним UTC naive
+    # мы храним naive UTC → сравниваем с naive UTC
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     session = SessionLocal()
     try:
-        # для каждого user_id берём максимум expires_at
         rows = (
             session.query(Subscription.user_id, func.max(Subscription.expires_at))
             .group_by(Subscription.user_id)
             .all()
         )
 
-        to_disable: list[int] = [uid for uid, max_exp in rows if max_exp and max_exp <= now]
-
+        to_disable = [uid for uid, max_exp in rows if max_exp and max_exp <= now]
         if not to_disable:
             return
 
         log.info("Expired users to disable: %s", to_disable)
 
         for uid in to_disable:
-            # возьмём последнюю по времени план-строку (для лога/уведомления)
             last_sub = (
                 session.query(Subscription)
                 .filter(Subscription.user_id == uid)
@@ -47,11 +45,10 @@ def _remove_expired_subscriptions(on_expire: Callable[[int, str], None]) -> None
             plan = last_sub.plan if last_sub else "-"
 
             try:
-                on_expire(uid, plan)   # Кик планируем снаружи (в entry.run_coro)
+                on_expire(uid, plan)  # внутри on_expire действия бота планируются через run_coro
             except Exception:
                 log.exception("on_expire failed for user_id=%s", uid)
 
-            # чистим все просроченные записи этого юзера
             session.query(Subscription).filter(
                 Subscription.user_id == uid,
                 Subscription.expires_at <= now
@@ -66,7 +63,7 @@ def _remove_expired_subscriptions(on_expire: Callable[[int, str], None]) -> None
         session.close()
 
 
-def start_scheduler(on_expire: Callable[[int, str], None], interval_seconds: int = 5) -> BackgroundScheduler:
+def start_scheduler(on_expire: Callable[[int, str], None], interval_seconds: int = 60) -> BackgroundScheduler:
     """
     Запускает APScheduler. on_expire(user_id, plan) — колбэк, который кикает пользователя.
     """
@@ -83,7 +80,7 @@ def start_scheduler(on_expire: Callable[[int, str], None], interval_seconds: int
         max_instances=1,
         coalesce=True,
         id="remove_expired_subscriptions",
-        next_run_time=None,  # старт со следующего тика
+        next_run_time=None,
     )
     _scheduler.start()
     log.info("Scheduler started (interval=%ss)", interval_seconds)
